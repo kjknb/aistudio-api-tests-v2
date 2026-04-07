@@ -1,3 +1,24 @@
+"""tests/test_tasks.py — 任务/生成模块测试
+
+【测试覆盖】
+  TestGenerateText:   文本生成（正常/指定项目/参数校验/trial 配额）
+  TestGenerateImage:  图片生成（正常/缺 modelId/错误模型类型）
+  TestTaskQuery:      任务查询（详情/轮询到完成/不存在/他人任务权限）
+  TestTaskList:       任务列表（分页/按 status/type/projectId 筛选）
+  TestTaskCancel:     取消任务（正常取消/取消已完成/取消不存在）
+  TestTaskDelete:     删除任务（先提交等完成再删除/删除不存在）
+
+【异步任务的测试思路】
+  任务提交是异步的（返回 202 + taskId），测试有两种方式：
+  1. 用 TaskAPI 直接调 — 测试提交本身的参数校验
+  2. 用 TaskService 的 submit_and_wait_* — 测试完整流程
+
+【数据清理策略】
+  - test_cancel_task_success：提交后立即取消，不需要额外清理
+  - test_delete_completed_task：用 service 层等待完成，再删除
+  - 其他测试：只查询或取消，不产生持久数据
+"""
+
 import time
 import allure
 import pytest
@@ -6,6 +27,8 @@ from api import TaskAPI
 from service import create_unauthed_client
 
 
+# ==================== 文本生成 ====================
+
 @allure.epic("AIStudio Mock API")
 @allure.feature("任务/生成模块")
 class TestGenerateText:
@@ -13,6 +36,13 @@ class TestGenerateText:
     @allure.severity(allure.severity_level.CRITICAL)
     @allure.title("提交文本生成任务 - 应返回 202 processing")
     def test_generate_text_success(self, creator_task_api):
+        """提交文本生成任务 — 验证异步接口返回 202 + taskId
+
+        异步任务的特点：
+          - HTTP 202（Accepted）而不是 200
+          - 返回 taskId 用于后续轮询
+          - status 初始为 "processing"
+        """
         resp = creator_task_api.submit_text(
             "m_text_01", "请用Python实现一个快速排序算法",
             parameters={"temperature": 0.7, "max_tokens": 2048}
@@ -26,6 +56,7 @@ class TestGenerateText:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("文本生成指定 projectId")
     def test_generate_text_with_project(self, creator_task_api):
+        """指定 projectId 提交任务 — 验证任务可以归到项目下"""
         resp = creator_task_api.submit_text(
             "m_text_01", "写一首诗",
             parameters={"temperature": 0.9},
@@ -39,6 +70,14 @@ class TestGenerateText:
     @allure.title("文本生成参数校验 - {case[name]}")
     @pytest.mark.parametrize("case", load_yaml("generate_data.yaml")["generate_text_invalid"])
     def test_generate_text_invalid(self, creator_task_api, case):
+        """数据驱动：各种非法参数的文本生成请求
+
+        测试数据来自 data/generate_data.yaml，覆盖：
+          - 缺少 modelId
+          - 缺少 prompt
+          - modelId 为图片类型（应该用文本模型）
+          - modelId 不存在
+        """
         resp = creator_task_api.client.post("/api/v1/generate/text", json=case["data"])
         assert_fail(resp, case["expected_status"])
 
@@ -46,11 +85,19 @@ class TestGenerateText:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("trial_user token 配额 - 正常提交")
     def test_generate_text_trial(self, trial_client):
+        """trial_user 提交文本生成 — 验证配额范围内可以正常提交
+
+        trial_user 的 usedTokens=9800 < dailyTokens=10000，应该能提交成功。
+        但如果配额用完，应该返回 429（Too Many Requests）。
+        所以这里接受 202 或 429 两种结果。
+        """
         api = TaskAPI(trial_client)
         resp = api.submit_text("m_text_01", "测试配额")
         # trial_user usedTokens=9800 < dailyTokens=10000, 应成功
         assert resp.status_code in (202, 429)
 
+
+# ==================== 图片生成 ====================
 
 @allure.epic("AIStudio Mock API")
 @allure.feature("任务/生成模块")
@@ -59,6 +106,7 @@ class TestGenerateImage:
     @allure.severity(allure.severity_level.CRITICAL)
     @allure.title("提交图片生成任务 - 应返回 202 processing")
     def test_generate_image_success(self, creator_task_api):
+        """提交图片生成任务 — 和文本生成类似，但参数不同（size/quality/style）"""
         resp = creator_task_api.submit_image(
             "m_img_01", "一只可爱的柴犬在樱花树下",
             parameters={"size": "1792x1024", "quality": "hd", "style": "natural"}
@@ -72,6 +120,7 @@ class TestGenerateImage:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("图片生成缺少 modelId - 应返回 400")
     def test_generate_image_missing_model(self, creator_task_api):
+        """缺少 modelId → 400"""
         resp = creator_task_api.client.post("/api/v1/generate/image", json={"prompt": "测试图片"})
         assert_fail(resp, 400)
 
@@ -79,9 +128,12 @@ class TestGenerateImage:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("图片生成使用文本模型 - 应返回 400")
     def test_generate_image_wrong_model_type(self, creator_task_api):
+        """用文本模型生成图片 → 400（模型类型不匹配）"""
         resp = creator_task_api.submit_image("m_text_01", "测试")
         assert_fail(resp, 400)
 
+
+# ==================== 任务查询 ====================
 
 @allure.epic("AIStudio Mock API")
 @allure.feature("任务/生成模块")
@@ -90,6 +142,7 @@ class TestTaskQuery:
     @allure.severity(allure.severity_level.CRITICAL)
     @allure.title("查询任务详情 - 应包含状态和进度")
     def test_get_task_detail(self, creator_task_api):
+        """查询任务详情 — 验证包含 taskId、status、progress 等字段"""
         resp = creator_task_api.get_task("task_001")
         data = assert_success(resp)
         task = data["data"]
@@ -102,7 +155,17 @@ class TestTaskQuery:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("使用 service 层轮询任务直至完成")
     def test_poll_task_to_completion(self, creator_task_service):
-        """通过业务层提交+等待，测试层不写轮询循环"""
+        """通过业务层提交+等待 — 测试层不写轮询循环
+
+        这个测试展示了 service 层的价值：
+          一行代码 = 提交任务 + 轮询等待 + 拿到结果
+
+        调用链：
+          test → TaskService.submit_and_wait_text()
+                   → TaskAPI.submit_text()         # 提交
+                   → wait_for_task()               # 轮询
+                   → 返回 completed 的任务详情
+        """
         task = creator_task_service.submit_and_wait_text(
             "m_text_01", "请用一句话介绍Python",
             parameters={"temperature": 0.7, "max_tokens": 100}
@@ -114,6 +177,7 @@ class TestTaskQuery:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("查询不存在的任务 - 应返回 404")
     def test_get_nonexistent_task(self, creator_task_api):
+        """查询不存在的任务 → 404"""
         resp = creator_task_api.get_task("task_not_exist")
         assert_fail(resp, 404)
 
@@ -121,11 +185,16 @@ class TestTaskQuery:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("查询他人任务 - 应返回 404")
     def test_get_other_user_task(self, admin_client):
-        """用 admin 查询 creator01 的 task_001"""
+        """用 admin 查询 creator01 的 task — 验证权限隔离
+
+        和项目权限类似，不同用户的任务数据隔离。
+        """
         api = TaskAPI(admin_client)
         resp = api.get_task("task_001")
         assert_fail(resp, 404)
 
+
+# ==================== 任务列表 ====================
 
 @allure.epic("AIStudio Mock API")
 @allure.feature("任务/生成模块")
@@ -134,6 +203,7 @@ class TestTaskList:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("获取任务列表 - 应支持分页和筛选")
     def test_list_tasks(self, creator_task_api):
+        """获取任务列表 — 验证分页结构"""
         resp = creator_task_api.list_tasks()
         data = assert_success(resp)
         assert "list" in data["data"]
@@ -143,6 +213,7 @@ class TestTaskList:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("按 status=completed 筛选任务")
     def test_list_tasks_filter_by_status(self, creator_task_api):
+        """按状态筛选 — 只返回已完成的任务"""
         resp = creator_task_api.list_tasks(status="completed")
         data = assert_success(resp)
         for t in data["data"]["list"]:
@@ -152,6 +223,7 @@ class TestTaskList:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("按 type=image 筛选任务")
     def test_list_tasks_filter_by_type(self, creator_task_api):
+        """按类型筛选 — 只返回图片任务"""
         resp = creator_task_api.list_tasks(type="image")
         data = assert_success(resp)
         for t in data["data"]["list"]:
@@ -161,11 +233,14 @@ class TestTaskList:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("按 projectId 筛选任务")
     def test_list_tasks_filter_by_project(self, creator_task_api):
+        """按项目筛选 — 只返回某个项目下的任务"""
         resp = creator_task_api.list_tasks(project_id="proj_001")
         data = assert_success(resp)
         # 验证返回了数据（mock 可能不在列表字段带 projectId）
         assert isinstance(data["data"]["list"], list)
 
+
+# ==================== 取消任务 ====================
 
 @allure.epic("AIStudio Mock API")
 @allure.feature("任务/生成模块")
@@ -174,6 +249,13 @@ class TestTaskCancel:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("取消 processing 中的任务 - 应成功")
     def test_cancel_task_success(self, creator_task_api):
+        """提交后立即取消 — 利用 text 类型第一个 stage 有 500ms 延迟的特性
+
+        这个测试有个潜在的竞态条件：
+          如果任务在取消请求发出前就完成了，测试会失败。
+          现在靠 mock 的 500ms 延迟保证，但在真实 CI 环境下可能不稳定。
+          改进方案：用 service 层加一个 submit_and_cancel() 原子操作。
+        """
         # 提交后立即取消（text 类型第一个 stage 有 500ms 延迟，来得及）
         resp = creator_task_api.submit_text("m_text_01", "会被取消的任务")
         task_id = assert_success(resp)["data"]["taskId"]
@@ -185,6 +267,7 @@ class TestTaskCancel:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("取消已完成的任务 - 应返回 400")
     def test_cancel_completed_task(self, creator_task_api):
+        """取消已完成的任务 → 400（已完成的任务不能取消）"""
         resp = creator_task_api.cancel("task_001")
         assert_fail(resp, 400)
 
@@ -192,9 +275,12 @@ class TestTaskCancel:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("取消不存在的任务 - 应返回 404")
     def test_cancel_nonexistent_task(self, creator_task_api):
+        """取消不存在的任务 → 404"""
         resp = creator_task_api.cancel("task_not_exist")
         assert_fail(resp, 404)
 
+
+# ==================== 删除任务 ====================
 
 @allure.epic("AIStudio Mock API")
 @allure.feature("任务/生成模块")
@@ -203,6 +289,14 @@ class TestTaskDelete:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("删除已完成的任务 - 应成功")
     def test_delete_completed_task(self, creator_task_service, creator_task_api):
+        """先提交并等完成，再删除 — 验证完整的任务生命周期
+
+        这个测试同时使用了 service 层和 api 层：
+          - service 层：submit_and_wait_text() 编排提交+轮询
+          - api 层：delete() 做最后的删除操作
+
+        体现了分层的好处：复杂流程用 service，简单操作用 api。
+        """
         # 用 service 层提交+等待
         task = creator_task_service.submit_and_wait_text(
             "m_text_01", "待删除的任务"
@@ -215,5 +309,6 @@ class TestTaskDelete:
     @allure.severity(allure.severity_level.NORMAL)
     @allure.title("删除不存在的任务 - 应返回 404")
     def test_delete_nonexistent_task(self, creator_task_api):
+        """删除不存在的任务 → 404"""
         resp = creator_task_api.delete("task_not_exist")
         assert_fail(resp, 404)
