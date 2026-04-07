@@ -1,0 +1,6 @@
+requests>=2.31.0
+pytest>=7.4.0
+pytest-allure>=2.13.2
+allure-pytest>=2.13.2
+jsonschema>=4.19.0
+PyYAML>=6.0

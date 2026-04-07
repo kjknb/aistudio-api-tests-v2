@@ -1,0 +1,44 @@
+# 聊天测试数据
+chat_valid:
+  - name: "单轮对话"
+    data:
+      modelId: "m_text_01"
+      messages:
+        - role: "user"
+          content: "你好"
+  - name: "多轮对话"
+    data:
+      modelId: "m_text_01"
+      messages:
+        - role: "system"
+          content: "你是助手"
+        - role: "user"
+          content: "什么是Docker"
+        - role: "assistant"
+          content: "Docker是容器化平台"
+        - role: "user"
+          content: "和虚拟机的区别"
+
+chat_invalid:
+  - name: "缺少modelId"
+    data:
+      messages:
+        - role: "user"
+          content: "你好"
+    expected_status: 400
+  - name: "缺少messages"
+    data:
+      modelId: "m_text_01"
+    expected_status: 400
+  - name: "messages为空数组"
+    data:
+      modelId: "m_text_01"
+      messages: []
+    expected_status: 400
+  - name: "modelId为图片类型"
+    data:
+      modelId: "m_img_01"
+      messages:
+        - role: "user"
+          content: "你好"
+    expected_status: 400

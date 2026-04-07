@@ -1,0 +1,78 @@
+# 注册测试数据
+register_valid:
+  username: "newuser01"
+  password: "Test1234"
+  email: "newuser@example.com"
+  nickname: "测试用户"
+
+register_invalid:
+  # 缺少必填字段
+  - name: "缺少username"
+    data:
+      password: "Test1234"
+      email: "test@example.com"
+    expected_status: 400
+  - name: "缺少password"
+    data:
+      username: "testuser"
+      email: "test@example.com"
+    expected_status: 400
+  - name: "缺少email"
+    data:
+      username: "testuser"
+      password: "Test1234"
+    expected_status: 400
+
+  # 用户名长度
+  - name: "用户名太短(2字符)"
+    data:
+      username: "ab"
+      password: "Test1234"
+      email: "ab@example.com"
+    expected_status: 400
+  - name: "用户名太长(21字符)"
+    data:
+      username: "a12345678901234567890"
+      password: "Test1234"
+      email: "long@example.com"
+    expected_status: 400
+
+  # 密码强度
+  - name: "密码无大写字母"
+    data:
+      username: "testuser01"
+      password: "test1234"
+      email: "test01@example.com"
+    expected_status: 400
+  - name: "密码无小写字母"
+    data:
+      username: "testuser02"
+      password: "TEST1234"
+      email: "test02@example.com"
+    expected_status: 400
+  - name: "密码无数字"
+    data:
+      username: "testuser03"
+      password: "TestTest"
+      email: "test03@example.com"
+    expected_status: 400
+  - name: "密码不足8位"
+    data:
+      username: "testuser04"
+      password: "Te1"
+      email: "test04@example.com"
+    expected_status: 400
+
+  # 邮箱格式
+  - name: "邮箱缺少@"
+    data:
+      username: "testuser05"
+      password: "Test1234"
+      email: "testexample.com"
+    expected_status: 400
+  - name: "邮箱缺少域名"
+    data:
+      username: "testuser06"
+      password: "Test1234"
+      email: "test@"
+    expected_status: 400

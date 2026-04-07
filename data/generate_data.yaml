@@ -1,0 +1,48 @@
+# 生成文本测试数据
+generate_text_valid:
+  - name: "基本文本生成"
+    data:
+      modelId: "m_text_01"
+      prompt: "请用Python实现一个快速排序算法"
+      parameters:
+        temperature: 0.7
+        max_tokens: 2048
+  - name: "指定项目ID"
+    data:
+      modelId: "m_text_01"
+      prompt: "写一首关于春天的诗"
+      parameters:
+        temperature: 0.9
+        max_tokens: 1024
+      projectId: "proj_001"
+
+generate_text_invalid:
+  - name: "缺少modelId"
+    data:
+      prompt: "测试"
+    expected_status: 400
+  - name: "缺少prompt"
+    data:
+      modelId: "m_text_01"
+    expected_status: 400
+  - name: "modelId为图片类型"
+    data:
+      modelId: "m_img_01"
+      prompt: "测试"
+    expected_status: 400
+  - name: "modelId不存在"
+    data:
+      modelId: "m_not_exist"
+      prompt: "测试"
+    expected_status: 400
+
+# 生成图片测试数据
+generate_image_valid:
+  - name: "基本图片生成"
+    data:
+      modelId: "m_img_01"
+      prompt: "一只可爱的柴犬在樱花树下"
+      parameters:
+        size: "1792x1024"
+        quality: "hd"
+        style: "natural"
